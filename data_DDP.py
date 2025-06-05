@@ -28,9 +28,9 @@ def read_dataset(is_big_computer = False):
     names = ['user_id', 'movie_id', 'rating', 'timestamp']
     data = pd.read_csv("./ml-32m/ratings.csv", names=names, header=0)
     if not is_big_computer:
-        data = data.sample(n=10_000, random_state=42) # Limit to 1 million ratings for faster processing
+        data = data.sample(n=10_000 + (10_000 % 32), random_state=42) # Limit to 1 million ratings for faster processing
     else:
-        data = data.sample(n=1_000_000, random_state=42) # Limit to 1 million ratings for faster processing
+        data = data.sample(n=1_000_000 + (1_000_000 % 32), random_state=42) # Limit to 1 million ratings for faster processing
 
     data["user_id"] = data["user_id"]
     data["movie_id"] = data["movie_id"]
@@ -174,7 +174,7 @@ def get_dataloaders(train_set : torch.utils.data.TensorDataset, test_set: torch.
     # The trainer should call train_iter.sampler.set_epoch(epoch) at every epoch to shuffle.
     # Each process will receive batch_size samples per iteration.
     train_iter = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_set)) 
-    test_iter = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(train_set))
+    test_iter = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, sampler=DistributedSampler(test_set))
     return train_iter, test_iter
 
 

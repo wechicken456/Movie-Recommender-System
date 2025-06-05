@@ -15,7 +15,7 @@
 # 
 # 
 
-# In[1]:
+# In[12]:
 
 
 from d2l import torch as d2l
@@ -30,7 +30,7 @@ from torch import nn
 import data_DDP as data
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
+from torch.distributed import init_process_group, destroy_process_group, barrier, all_reduce
 import torch.multiprocessing as mp
 
 
@@ -75,7 +75,7 @@ class MF(d2l.Module):
 
 # ### Evaluator - difference between predicted and real rating scores
 
-# In[3]:
+# In[ ]:
 
 
 def evaluator(net, test_iter, device=None):
@@ -89,8 +89,9 @@ def evaluator(net, test_iter, device=None):
 
     for users, movies, ratings in test_iter:
         outputs = net(users, movies).squeeze(1)
-        rmse_list.append(rmse(outputs, ratings).item())
-    return np.mean(np.array(rmse_list))
+        rmse_list.append(rmse(outputs, ratings.to(device)))
+    rmse_list = torch.tensor(rmse_list, device=device)
+    return rmse_list.mean()
 
 
 # ### Training and Etestuating the model
@@ -99,7 +100,7 @@ def evaluator(net, test_iter, device=None):
 
 
 class TrainerDDP(d2l.Trainer):
-    def __init__(self, max_epochs, optimizer, loss, lr = 0.002, wd = 1e-5, ddp_rank = 0, gradient_clip_test=0, save_every_n_epochs=5):
+    def __init__(self, max_epochs, optimizer, loss, ddp_rank, lr = 0.002, wd = 1e-5, gradient_clip_test=0, save_every_n_epochs=5):
         self.save_hyperparameters()
         super().__init__(max_epochs)
         self.train_losses = []
@@ -107,6 +108,9 @@ class TrainerDDP(d2l.Trainer):
         self.optim = optimizer
         self.loss = loss
         self.ddp_rank = ddp_rank
+        # To plot the training and test losses
+        self.board = d2l.ProgressBoard()
+
 
     def prepare_model(self, model):
         """
@@ -123,8 +127,6 @@ class TrainerDDP(d2l.Trainer):
                                 if self.test_dataloader is not None else 0)
 
     def fit(self, model, train_iter, test_iter):
-        self.animator = d2l.Animator(xlabel='epoch', xlim=[1, self.max_epochs], ylim=[0, 2],
-                            legend=['train loss', 'test RMSE'])
 
         self.prepare_data(train_iter, test_iter)
         self.prepare_model(model)
@@ -146,9 +148,13 @@ class TrainerDDP(d2l.Trainer):
     def fit_epoch(self):
         """Defined in :numref:`sec_linear_scratch`"""
         self.model.train()
+        barrier()
         self.train_dataloader.sampler.set_epoch(self.epoch)  # set epoch for shuffling in DDP
-
+        total_loss = torch.tensor(0.0, device=self.ddp_rank)
+        batch_size = 0
+        print(f"Process {self.ddp_rank}, Epoch {self.epoch + 1}/{self.max_epochs}, Dataloader size: {len(self.train_dataloader)}", flush = True)
         for batch in self.train_dataloader:
+            batch_size = len(batch[0])
             loss = self.training_step(batch)
             self.optim.zero_grad()
             with torch.no_grad():
@@ -157,8 +163,9 @@ class TrainerDDP(d2l.Trainer):
                 
             self.train_batch_idx += 1
             num_batches = len(self.train_dataloader)
-            self.train_losses.append(loss.item())
+            total_loss += loss
 
+        self.train_losses.append(total_loss / len(self.train_dataloader.dataset))
 
         if self.test_dataloader is None:
             return
@@ -166,14 +173,18 @@ class TrainerDDP(d2l.Trainer):
         self.model.eval()
         with torch.no_grad():
             loss = self.test_step()
-            self.test_losses.append(loss)
+            all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+            self.test_losses.append(loss / len(self.test_dataloader.dataset))
+
+
             self.test_batch_idx += 1
 
-        if self.ddp_rank == 0:
-            self.animator.add(self.epoch + 1, (self.train_losses[-1].cpu().numpy(), self.test_losses[-1].cpu().numpy()))
+        if self.ddp_rank == 0:       
+            self.plot('loss', self.train_losses[-1], train=True)
+            self.plot('loss', self.test_losses[-1], train=False)
             plt.savefig("mf_loss.png")
-
-
+        
+        print(f"Process {self.ddp_rank}, Epoch {self.epoch + 1}/{self.max_epochs}, Train Loss: {self.train_losses[-1]:.4f}, Test RMSE: {self.test_losses[-1]:.4f}, Train Batch: {self.train_batch_idx}, Test Batch: {self.test_batch_idx}, # of samples in train batch: {batch_size}", flush = True)
 
     
     def prepare_batch(self, batch):
@@ -189,29 +200,28 @@ class TrainerDDP(d2l.Trainer):
         users, movies, ratings = batch
         outputs = self.model(users, movies).squeeze(1)
         loss = self.loss(outputs, ratings.to(self.ddp_rank))
-        return lossmf.ipynb
+        return loss
 
     def test_step(self):
-        return evaluator(self.model, self.test_dataloader, None)
+        loss = evaluator(self.model, self.test_dataloader, self.ddp_rank)
+        return loss
 
-    def plot_losses(self):
-        """Plot training and validation losses"""
-        plt.figure(figsize=(10, 6))
-        plt.plot(range(1, len(self.train_losses) + 1), self.train_losses, label='Training Loss')
-        
-        if self.test_losses:
-            plt.plot(range(1, len(self.test_losses) + 1), self.test_losses, label='Validation Loss')
-            
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.title('Training and Validation Losses')
-        plt.legend()
-        plt.grid(True)
-        
-        # Clear the output to avoid multiple plots
-        from IPython.display import clear_output
-        clear_output(wait=True)
-        plt.show()
+
+    def plot(self, key, value, train):
+        """Plot a point in animation."""
+        self.board.xlabel = 'epoch'
+        if train:
+            x = self.train_batch_idx / \
+                self.num_train_batches
+            n = self.num_train_batches / \
+                2
+        else:
+            x = self.epoch + 1
+            n = self.num_test_batches / \
+                2
+        self.board.draw(x, d2l.numpy(d2l.to(value, d2l.cpu())),
+                        ('train_' if train else 'val_') + key,
+                        every_n=int(n))
 
 
 # In[ ]:
@@ -223,8 +233,9 @@ def ddp_setup():
 
 def worker(rank, world_size):    
     init_process_group("nccl", rank=rank, world_size=world_size)
-
+    barrier()
     torch.cuda.set_device(rank)
+    torch.cuda.empty_cache()
     global num_users, num_movies, train_set, test_set
     train_iter, test_iter = data.get_dataloaders(train_set, test_set, batch_size=32)
     net = MF(32, num_users, num_movies).to(rank)
@@ -233,7 +244,7 @@ def worker(rank, world_size):
 
     lr = 0.002
     wd = 1e-5
-    num_epochs = 10
+    num_epochs = 5
     optimizer = torch.optim.Adam(ddp_net.parameters(), lr=lr, weight_decay=wd)
     loss_fn = nn.MSELoss()
     trainer = TrainerDDP(max_epochs=num_epochs, optimizer=optimizer, loss=loss_fn, lr=lr, wd=wd, ddp_rank = rank)
@@ -243,7 +254,7 @@ def worker(rank, world_size):
 
     if rank == 0:
         CHECKPOINT_PATH = "./mf_checkpoint.pth"
-        torch.save(ddp_model.state_dict(), CHECKPOINT_PATH)
+        torch.save(ddp_net.state_dict(), CHECKPOINT_PATH)
 
     destroy_process_group()
 
