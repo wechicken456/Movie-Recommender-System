@@ -60,7 +60,7 @@ class MF(d2l.Module):
         """
         if user_id.shape != movie_id.shape:
             raise testueError("user_id and movie_id must have the same shape.")        
-    
+
         # if this is a single scalar tensor, add a dimension to make it a batch of size 1
         if user_id.ndim == 0: 
             user_id = user_id.unsqueeze(0)
@@ -149,7 +149,7 @@ class Trainer(d2l.Trainer):
         https://docs.pytorch.org/docs/stable/generated/torch.nn.DataParallel.html  
         """
         self.model = model
-      
+
         if self.devices:
             self.model.to(self.devices[0])
             if len(self.devices) > 1: 
@@ -188,7 +188,7 @@ class Trainer(d2l.Trainer):
             with torch.no_grad():
                 loss.backward()
                 self.optim.step()
-                
+
             self.train_batch_idx += 1
             num_batches = len(self.train_dataloader)
             self.train_losses.append(loss.item())
@@ -206,7 +206,7 @@ class Trainer(d2l.Trainer):
         self.animator.add(self.epoch + 1, (self.train_losses[-1], self.test_losses[-1]))
         plt.savefig("mf_loss.png")
 
-    
+
     def training_step(self, batch):
         users, movies, ratings = batch
         outputs = self.model(users, movies).squeeze(1)
@@ -220,22 +220,22 @@ class Trainer(d2l.Trainer):
         """Plot training and validation losses"""
         plt.figure(figsize=(10, 6))
         plt.plot(range(1, len(self.train_losses) + 1), self.train_losses, label='Training Loss')
-        
+
         if self.test_losses:
             plt.plot(range(1, len(self.test_losses) + 1), self.test_losses, label='Validation Loss')
-            
+
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         plt.title('Training and Validation Losses')
         plt.legend()
         plt.grid(True)
-        
+
         # Clear the output to avoid multiple plots
         from IPython.display import clear_output
         clear_output(wait=True)
         plt.show()
 
-        
+
 
 
 # In[ ]:
@@ -256,7 +256,7 @@ class TrainerDDP(d2l.Trainer):
         The model should already be wrapped around DDP() on the correct device (self.device).
         """
         self.model = model
-            
+
 
     def prepare_data(self, train_iter, test_iter):
         self.train_dataloader = train_iter
@@ -289,7 +289,7 @@ class TrainerDDP(d2l.Trainer):
             with torch.no_grad():
                 loss.backward()
                 self.optim.step()
-                
+
             self.train_batch_idx += 1
             num_batches = len(self.train_dataloader)
             self.train_losses.append(loss.item())
@@ -307,7 +307,7 @@ class TrainerDDP(d2l.Trainer):
         self.animator.add(self.epoch + 1, (self.train_losses[-1].cpu().numpy(), self.test_losses[-1].cpu().numpy()))
         plt.savefig("mf_loss.png")
 
-    
+
     def prepare_batch(self, batch):
         """
         Prepare the batch for training or testing.
@@ -330,16 +330,16 @@ class TrainerDDP(d2l.Trainer):
         """Plot training and validation losses"""
         plt.figure(figsize=(10, 6))
         plt.plot(range(1, len(self.train_losses) + 1), self.train_losses, label='Training Loss')
-        
+
         if self.test_losses:
             plt.plot(range(1, len(self.test_losses) + 1), self.test_losses, label='Validation Loss')
-            
+
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         plt.title('Training and Validation Losses')
         plt.legend()
         plt.grid(True)
-        
+
         # Clear the output to avoid multiple plots
         from IPython.display import clear_output
         clear_output(wait=True)
@@ -374,14 +374,14 @@ def worker(rank, world_size):
 
     dist.destroy_process_group()
 
-    
+
 
 
 def main():
     world_size = torch.cuda.device_count()
-    
+
     mp.spawn(worker, args=(world_size,), nprocs=world_size, join=True)
-    
+
     print(f"Using {world_size} for training.")
     mp.spawn()
 

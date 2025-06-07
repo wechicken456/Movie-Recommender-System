@@ -42,10 +42,10 @@ def read_dataset(is_big_computer = False):
 def reindex_data(data : pd.DataFrame):
     user_id_map = {id: i for i, id in enumerate(data.user_id.unique())}
     movie_id_map = {id: i for i, id in enumerate(data.movie_id.unique())}
-    
+
     data['user_id'] = data['user_id'].map(user_id_map)
     data['movie_id'] = data['movie_id'].map(movie_id_map)
-    
+
     return data
 
 
@@ -96,7 +96,7 @@ def split_data(data : pd.DataFrame, num_users, num_movies, split_mode = "random"
         training_mask = np.random.rand(len(data)) > test_ratio
         train_data = data[training_mask]
         test_data = data[~training_mask]
-    
+
     elif split_mode == "seq-aware":
         user_groups = data.groupby('user_id')
         train_data = []
@@ -108,7 +108,7 @@ def split_data(data : pd.DataFrame, num_users, num_movies, split_mode = "random"
             test_data.append(group.iloc[split_index:])
         train_data = pd.DataFrame(pd.concat(train_data, ignore_index=True))
         test_data = pd.DataFrame(pd.concat(test_data, ignore_index=True))
-    
+
     else:
         raise ValueError("split_mode must be 'random' or 'seq-aware'")
 
@@ -133,7 +133,7 @@ def load_data(data : pd.DataFrame, num_users, num_movies, feedback="explicit"):
         scores = data["rating"].astype(int)
     else:
         scores = pd.Series(1, index=data.index)
-    
+
     i = 0
     for line in data.itertuples(): # itertuples is faster than iterrows for large DataFrames
         user_id, movie_id = int(line.user_id), int(line.movie_id)
@@ -142,7 +142,7 @@ def load_data(data : pd.DataFrame, num_users, num_movies, feedback="explicit"):
         else:
             inter.setdefault(user_id - 1, []).append(movie_id - 1)
         i += 1
-        
+
     return list(data["user_id"]), list(data["movie_id"]), list(scores), inter
 
 
